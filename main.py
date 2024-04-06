@@ -34,7 +34,7 @@ args={'policy':"Gaussian", # Policy Type: Gaussian | Deterministic (default: Gau
         'lr':0.0003, # learning rate (default: 0.0003)
         'alpha':0.2, # Temperature parameter α determines the relative importance of the entropy\term against the reward (default: 0.2)
         'automatic_entropy_tuning':False, # Automaically adjust α (default: False)
-        'batch_size':8192, # batch size (default: 256)
+        'batch_size':512, # batch size (default: 256)
         'num_steps':1000, # maximum number of steps (default: 1000000)
         'hidden_sizes':[1024,512,512,256], # 隐藏层大小，带有激活函数的隐藏层层数等于这一列表大小
         'updates_per_step':1, # model updates per simulator step (default: 1) 每步对参数更新的次数
@@ -42,7 +42,7 @@ args={'policy':"Gaussian", # Policy Type: Gaussian | Deterministic (default: Gau
         'target_update_interval':10, # Value target update per no. of updates per step (default: 1) 目标网络更新的间隔
         'replay_size':10000000, # size of replay buffer (default: 10000000)
         'cuda':True, # run on CUDA (default: False)
-        'LOAD PARA': False, #是否读取参数
+        'LOAD PARA': True, #是否读取参数
         'task':'Train', # 测试或训练或画图，Train,Test,Plot
         'activation':nn.ReLU, #激活函数类型
         'plot_type':'2D-2line', #'3D-1line'为三维图，一条曲线；'2D-2line'为二维图，两条曲线
@@ -54,7 +54,7 @@ args={'policy':"Gaussian", # Policy Type: Gaussian | Deterministic (default: Gau
 sma = 7171e3
 thrust = 1e-2
 ref_p = 2e3
-T_f = 6000
+T_f = 2000
 discreT = 50
 Cd = np.eye(6)
 R = np.eye(3)*1e6
@@ -135,11 +135,11 @@ if args['task']=='Train':
         print("Episode: {}, episode steps: {}, reward: {}, success: {}".format(i_episode, episode_steps, round(episode_reward, 4), success))
         # round(episode_reward,2) 对episode_reward进行四舍五入，并保留两位小数
 
-        if i_episode % 200 == 0 and args['eval'] is True: #评价上一个训练过程
+        if i_episode % 100 == 0 and args['eval'] is True: #评价上一个训练过程
             avg_reward = 0.
             episodes = 10
             if args['LOAD PARA']==True:
-                episodes=100
+                episodes = 20
             done_num=0
             for _  in range(episodes):
                 state = env_f.reset()

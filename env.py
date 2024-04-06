@@ -27,15 +27,15 @@ class Rel_trans:
         # prediction horizon is xxx steps
         self.horizon = pre_horizon
         # action 包括a和b两个方向，3个智能体，每个智能体预测h步
-        self.action_space=spaces.Box(low = -0.05 , high = 0.05, shape=(2*3*self.horizon,), dtype=np.float32) 
+        self.action_space=spaces.Box(low = -0.1 , high = 0.1, shape=(2*3*self.horizon,), dtype=np.float32) 
         # 实际观测状态是当前状态+预测的序列  3个智能体 初始和结束状态 6个参数 +3(空间指向)
-        self.observation_space=spaces.Box(-np.inf,np.inf,shape=(3*6*2*self.horizon+3,),dtype=np.float32)
+        self.observation_space=spaces.Box(-np.inf,np.inf,shape=(3*6*2*self.horizon+3+1,),dtype=np.float32)
         # current state 三个星的状态
-        self.Sat_state = np.zeros((3*6,))
+        self.agent_state = np.zeros((3*6,))
         # 当前的轨道序列
-        self.Sat_seq = np.zeros((3*6*self.horizon,))
-        # 初始的轨道序列
-        self.Sat_seq = np.zeros((3*6*self.horizon,))
+        self.agent_seq = np.zeros((3*6*self.horizon,))
+        # 无智能体干预的轨道序列
+        self.dumm_seq = np.zeros((3*6*self.horizon,))
         # 目标轨道的序列
         self.target_seq = np.zeros((3*6*self.horizon,)) 
         # inject signal
@@ -55,7 +55,7 @@ class Rel_trans:
         self.R_norm = R / (self.c_dis**2 / (self.c_time**4))
         # 生成MPC各种矩阵
         # 状态和量测维度按道理应该分别取 state的维数 和 C的行数 
-        # self.Sat_state.shape[0], self.Cd_norm.shape[0]
+        # self.agent_state.shape[0], self.Cd_norm.shape[0]
         self.MPC = MPC_dep(6,6, self.horizon, 
                            self.Ad_norm, self.Bd_norm, self.Cd_norm, 
                            self.R_norm, self.Q_norm, self.S_norm)
@@ -71,22 +71,23 @@ class Rel_trans:
 
     def reset(self): #,prop_t
         super().__init__()
-        self.Sat_state_list=[]
+        self.agent_state_list=[]
         self.t_scn = 0 # 场景初始时间
         self.isInject=0 # done无法用于区分是否到达目标，所以加入另一个标志位
         self.done=False # done是q函数计算所必要的
-        # # initial orbit 以下为随机生成两组差距36度的轨道
-        # self.azi_0 = np.random.uniform(0, 2*np.pi)
-        # # 只朝z正已经覆盖了全部目标空间了，因为智能体姿态可以正负转，主要害怕的是-0到+0的奇异
-        # self.ele_f = np.random.uniform(0.05*np.pi, 0.5*np.pi)
-        # # final orbit 轨道差为0.2pi和0.1pi
-        # self.azi_f = self.azi_0 + np.random.uniform(-0.2*np.pi, 0.2*np.pi)
-        # ele_f = self.ele_f + np.random.uniform(-0.1*np.pi, 0.1*np.pi)
-        # 固定实验
-        self.azi_0 = 0.2*np.pi
-        self.ele_f = 0.15*np.pi
-        self.azi_f = self.azi_0 + 0.2*np.pi
-        ele_f = self.ele_f + 0.1*np.pi
+
+        ''' initial orbit 以下为随机生成两组差距36度的轨道'''
+        self.azi_0 = np.random.uniform(0, 2*np.pi)
+        # 只朝z正已经覆盖了全部目标空间了，因为智能体姿态可以正负转，主要害怕的是-0到+0的奇异
+        self.ele_f = np.random.uniform(0.05*np.pi, 0.5*np.pi)
+        # final orbit 轨道差为0.2pi和0.1pi
+        self.azi_f = self.azi_0 + np.random.uniform(-0.2*np.pi, 0.2*np.pi)
+        ele_f = self.ele_f + np.random.uniform(-0.1*np.pi, 0.1*np.pi)
+        '''固定实验 '''
+        # self.azi_0 = 0.2*np.pi
+        # self.ele_f = 0.15*np.pi
+        # self.azi_f = self.azi_0 + 0.2*np.pi
+        # ele_f = self.ele_f + 0.1*np.pi
         # Check and adjust ele_f if it exceeds 0.5*pi
         if ele_f > 0.5*np.pi or ele_f < 0.1*np.pi:
             ele_f = self.ele_f - (ele_f - self.ele_f)
@@ -114,8 +115,9 @@ class Rel_trans:
         Bi_f = Free(np.pi*2/3,0,self.Xf_adj,self.nT)
         Ci_f = Free(-np.pi*2/3,0,self.Xf_adj,self.nT)
         # 尤其需要注意，sat_state是 t时刻的[智能体1,智能体2，智能体3]
-        # 而后面的 Sat_seq 是 [智能体1（1-5时刻）,智能体2（1-5时刻），智能体3（1-5时刻）]
-        self.Sat_state = np.concatenate((Xi_0, Bi_0, Ci_0))
+        # 而后面的 agent_seq 是 [智能体1（1-5时刻）,智能体2（1-5时刻），智能体3（1-5时刻）]
+        self.agent_state = np.concatenate((Xi_0, Bi_0, Ci_0))
+        self.dumm_state =  self.agent_state
         self.Tar_state = np.concatenate((self.Xf_adj, Bi_f, Ci_f))
         
         s_len = 6*self.horizon # 智能体数据间的间隔，意思就是每个智能体有多少步
@@ -128,7 +130,8 @@ class Rel_trans:
                 # 这种就是按照 先排完一个智能体的全部数据，再排另外一个智能体
                 index_start = sat_i*s_len + ri*r_len  # 0 
                 index_end = index_start + 6
-                self.Sat_seq[index_start:index_end] = Free(t_r,0,self.Sat_state[sat_i*6:sat_i*6+6],self.nT)
+                self.agent_seq[index_start:index_end] = Free(t_r,0,self.agent_state[sat_i*6:sat_i*6+6],self.nT)
+                self.dumm_seq[index_start:index_end] = Free(t_r,0,self.agent_state[sat_i*6:sat_i*6+6],self.nT)
                 self.target_seq[index_start:index_end] = Free(t_r,0,self.Tar_state[sat_i*6:sat_i*6+6],self.nT)
                 
         def an2vec(elevation_rad,azimuth_rad):
@@ -141,32 +144,36 @@ class Rel_trans:
             return direction_vector
 
         self.heading = an2vec(self.ele_f,self.azi_f)
-            
+        self.travel = np.zeros(1)  
         # 大概率不会超过这个数字，在GEO下，200km的归一化长度为300左右, 包括目标指向的矢量，我希望网络能学到其中的关联
-        return np.concatenate((self.Sat_seq/1e3,self.target_seq/1e3,self.heading))
+        return np.concatenate((self.agent_seq/1e3,self.target_seq/1e3,self.heading,self.travel))
 
     def step(self,Sat_action): 
         # action是一个向量系数 3*2*self.horizon 个 3个智能体 每个智能体2个维度
         # 前一半的系数3*horizon是alpha，后一半的系数3*horizon是beta
-        self.Sat_state_list.append(self.Sat_state) # N x 18的矩阵
+        self.agent_state_list.append(self.agent_state) # N x 18的矩阵
         # 此时拿到的是上一个时刻预测的点，你可能要问为什么reset里来了一次，
         # 为什么还要再来一次，因为reset之后就得生成动作了，这个本来就是要预测的，只不过在reset里重复一下     
         
         # 沿着法向指向的矢量
-        normal_track = self.target_seq - self.Sat_seq  # 第一个智能体h*6个状态 第二个智能体 h*6个状态 第三个智能体 h*6个状态
+        normal_track = self.target_seq - self.agent_seq  # 第一个智能体h*6个状态 第二个智能体 h*6个状态 第三个智能体 h*6个状态
         alpha = np.repeat(Sat_action[0:3*self.horizon],6)
         # 沿着径向指向的矢量 由目标状态指向原点
         radius_track = - self.target_seq    # 3 * horizon * 6 第一个智能体h*6个状态 第二个智能体 h*6个状态 第三个智能体 h*6个状态
         beta = np.repeat(Sat_action[3*self.horizon:],6)  # 3 * horizon
         # 未修正的路径航点  alpha偏置，beta偏置 + 当前预测点
-        raw_point = np.dot(alpha,normal_track) + np.dot(beta,radius_track) + self.target_seq
-        # 倾向于目标轨道的系数
-        if self.t_scn <= self.T_final*0.7:
-            target_weight = self.t_scn/ self.T_final
-        else:
-            target_weight = 1.0
+        raw_point = np.dot(alpha,normal_track) + np.dot(beta,radius_track)
+        # 里程
+        self.travel[0] = self.t_scn/self.T_final
+        # # 倾向于目标轨道的系数
+        # if self.t_scn <= self.T_final*0.6:
+        #     target_weight = self.travel
+        # else:
+        #     target_weight = 1.0
+        # 使用连续的
+        target_weight = self.travel[0]**(1/5)
         # 修正后的路径航点 3*(h*6)
-        pred_point = raw_point * (1-target_weight) + self.target_seq * target_weight
+        pred_point = raw_point * (1-target_weight) + self.target_seq
 
 
 
@@ -181,68 +188,94 @@ class Rel_trans:
         # action_seq = np.zeros([3*ac_len,1])
         dV = 0.0
         
-        next_Sat_state = np.zeros([3*6,]) # 18个状态，就是最正统的智能体在T_SCN控制后的实际状态
-        next_Sat_pos = np.zeros([3,3])    # 仅用于计算三颗星的方向与目标天区
-        next_Sat_seq = np.zeros([3*s_len,]) # 从t_scn开始的外推
+        next_agent_state = np.zeros([3*6,]) # 18个状态，就是最正统的智能体在T_SCN控制后的实际状态
+        next_agent_pos = np.zeros([3,3])    # 仅用于计算三颗星的方向与目标天区
+         # 仅用于计算是否入轨
+        next_agent_seq = np.zeros([3*s_len,]) # 从t_scn开始的外推
+
+        next_dumm_state = np.zeros([3*6,]) # 不使用强化学习的MPC规划
+        dumm_Sat_pos = np.zeros([3,3])
+         # 仅用于计算是否入轨 所以暂时用不上
+        next_dumm_seq = np.zeros([3*s_len,])
+        
         for sat_i in range(0,3):
             # 从target集合中，取出单个智能体的预测序列 
             # 取出第一个智能体的 6*horizon 目标状态
             s_target_seq = pred_point[s_len*sat_i:s_len*(sat_i+1)] 
             # 取出第一个智能体的 6*1当前状态
-            s_sat_state = self.Sat_state[sat_i*6:sat_i*6+6] 
+            s_sat_state = self.agent_state[sat_i*6:sat_i*6+6]
+            s_dumm_state = self.dumm_state[sat_i*6:sat_i*6+6]
             # 一次项系数
             fo = np.hstack((s_sat_state, s_target_seq)).T @ self.f
+            fo_dumm = np.hstack((s_dumm_state, self.target_seq[s_len*sat_i:s_len*(sat_i+1)])).T @ self.f
             # 计算出第一个智能体的 3*horizon 个机动控制
             Acons_norm = self.MPC.Acons_func() @ self.F_norm
             Bcons_norm = self.MPC.Dy_func(-np.ones((6,1))*1e2, np.ones((6,1))*1e2) - self.MPC.Acons_func()@ self.M_norm @ s_sat_state.reshape(6, 1)
-            s_action_seq = quadprog(self.Hbar_half, fo.T, Acons_norm, Bcons_norm,  None, None,lb, ub)  
-            s_action_seq = s_action_seq.flatten() # 3*horizon
-            current_action = s_action_seq[0:3]
-            dV = dV + np.linalg.norm(current_action)
-            next_Sat_state[6*sat_i:6*(sat_i+1)] = self.Ad_norm @ s_sat_state + self.Bd_norm @ current_action
-            # 仅用于计算三颗星的方向与目标天区
-            next_Sat_pos[sat_i,:] = next_Sat_state[6*sat_i:6*sat_i+3]  
-            # 仅用于计算是否入轨
-            next_Sat_seq[s_len*sat_i:s_len*(sat_i+1)] = self.M_norm @ self.Sat_state[6*sat_i:6*(sat_i+1)] + self.F_norm @ s_action_seq
+            s_agent_act_seq = quadprog(self.Hbar_half, fo.T, Acons_norm, Bcons_norm,  None, None,lb, ub)  
+            # 计算出没有智能体参与的 3*horizon 个机动控制
+            s_dumm_act_seq = quadprog(self.Hbar_half, fo_dumm.T, Acons_norm, Bcons_norm,  None, None,lb, ub).flatten()  
 
+
+            s_agent_act_seq = s_agent_act_seq.flatten() # 3*horizon
+            current_action = s_agent_act_seq[0:3]
+            dV = dV + np.linalg.norm(current_action)
+            next_agent_state[6*sat_i:6*(sat_i+1)] = self.Ad_norm @ s_sat_state + self.Bd_norm @ current_action
+            next_dumm_state[6*sat_i:6*(sat_i+1)] = self.Ad_norm @ s_dumm_state + self.Bd_norm @ s_dumm_act_seq[0:3]
+            # 仅用于计算三颗星的方向与目标天区
+            next_agent_pos[sat_i,:] = next_agent_state[6*sat_i:6*sat_i+3]
+            dumm_Sat_pos[sat_i,:] = next_dumm_state[6*sat_i:6*sat_i+3]
+            # 仅用于计算是否入轨
+            next_agent_seq[s_len*sat_i:s_len*(sat_i+1)] = self.M_norm @ self.agent_state[6*sat_i:6*(sat_i+1)] + self.F_norm @ s_agent_act_seq
+            next_dumm_seq[s_len*sat_i:s_len*(sat_i+1)] = self.M_norm @ self.dumm_state[6*sat_i:6*(sat_i+1)] + self.F_norm @ s_dumm_act_seq
 
         '''计算目标天区与三颗星的方向构成面积的奖励'''
-        link1 = next_Sat_pos[1,:] - next_Sat_pos[0,:]
-        link2 = next_Sat_pos[2,:] - next_Sat_pos[0,:]
-        formation_product = np.cross(link1, link2)
-        proj_area = abs(0.5 * np.dot(formation_product, self.heading))
-        heading_reward = proj_area/(self.p_norm**2)
-        # print('heading_reward:',heading_reward)
+        def calculate_area(pos):
+            link1 = pos[1,:] - pos[0,:]
+            link2 = pos[2,:] - pos[0,:]
+            formation_product = np.cross(link1, link2)
+            proj_area = abs(0.5 * np.dot(formation_product, self.heading))
+            return proj_area
+        
+
+        heading_reward = calculate_area(next_agent_pos) - calculate_area(dumm_Sat_pos)
+        # print('heading_reward:',calculate_area(next_agent_pos))
         # print('dV:',dV)
-        J_control = self.target_seq - next_Sat_seq
+        J_agent = self.target_seq - next_agent_seq
+        J_dumm = self.target_seq - next_dumm_seq
 
-        if target_weight>0.9:
-            aaa= 1
-            pass
-        self.Sat_state = next_Sat_state
+        self.dumm_state = next_dumm_state
+        self.agent_state = next_agent_state
         self.t_scn += self.dT_norm
-
-        reward = - dV/1e2 + heading_reward*20 - np.linalg.norm(J_control)/1e3
-
-        if self.t_scn >= self.T_final or np.linalg.norm(J_control) <= 1e1:
+        '''
+        print('dV:',dV,'heading_reward: ',heading_reward,'alpha',np.linalg.norm(alpha),
+              'J:',np.linalg.norm(J_agent),'beta',np.linalg.norm(beta))
+              - np.linalg.norm(J_agent)/10
+              '''
+        """ reward here 随着步数递减 """
+        reward = heading_reward*(1 - self.travel[0]**(1/2))
+        # + (np.linalg.norm(J_dumm) - np.linalg.norm(J_agent))
+        # - (np.linalg.norm(alpha) + np.linalg.norm(beta))*20*np.linalg.norm(self.travel)**2
+        # print('j:',np.linalg.norm(J_dumm) - np.linalg.norm(J_agent))
+        # print('HEADING',heading_reward)
+        if self.t_scn >= self.T_final or np.linalg.norm(J_agent) <= 1e1:
             self.done = True
-            if np.linalg.norm(J_control) > 1e1:
+            if np.linalg.norm(J_agent) > 1e1:
                 self.isInject = 0 #用来区分越界和到达目标
-                reward = -1000
-            elif np.linalg.norm(J_control) <= 1e1 and self.t_scn <= self.T_final:
+                reward = 0
+            elif np.linalg.norm(J_agent) <= 1e1 and self.t_scn <= self.T_final:
                 self.isInject=1
-                reward=3000
+                reward = 1000
 
-        # if self.t_scn >= self.T_final or np.linalg.norm(J_control) <= 1e1:
+        # if self.t_scn >= self.T_final or np.linalg.norm(J_agent) <= 1e1:
         #     self.done = True
         # if not self.done:
         #     reward = - dV/1e2 + heading_reward*20
 
         # if self.done:
-        #     if np.linalg.norm(J_control) > 1e1:
+        #     if np.linalg.norm(J_agent) > 1e1:
         #         self.isInject = 0 #用来区分越界和到达目标
         #         reward = 0
-        #     elif np.linalg.norm(J_control) <= 1e1 and self.t_scn <= self.T_final:
+        #     elif np.linalg.norm(J_agent) <= 1e1 and self.t_scn <= self.T_final:
         #         self.isInject=1
         #         reward=3000
 
@@ -255,10 +288,11 @@ class Rel_trans:
                 # 这种就是按照 先排完一个智能体的全部数据，再排另外一个智能体
                 index_start = sat_i*s_len + ri*r_len  # 0 
                 index_end = index_start + 6
-                self.Sat_seq[index_start:index_end] = Free(t_r,0,self.Sat_state[sat_i*6:sat_i*6+6],self.nT)
+                self.agent_seq[index_start:index_end] = Free(t_r,0,self.agent_state[sat_i*6:sat_i*6+6],self.nT)
+                self.dumm_seq[index_start:index_end] = Free(t_r,0,self.dumm_state[sat_i*6:sat_i*6+6],self.nT)
                 self.target_seq[index_start:index_end] = Free(t_r,0,self.Tar_state[sat_i*6:sat_i*6+6],self.nT)
 
-        return np.concatenate((self.Sat_seq/1e3,self.target_seq/1e3,self.heading)), reward, self.done, self.isInject
+        return np.concatenate((self.agent_seq/1e3,self.target_seq/1e3,self.heading,self.travel)), reward, self.done, self.isInject
 
     def plot(self, args, data_x, data_y, data_z=None):
         if data_z!=None and args['plot_type']=="3D-1line":
