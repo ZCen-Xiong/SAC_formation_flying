@@ -42,7 +42,7 @@ args={'policy':"Gaussian", # Policy Type: Gaussian | Deterministic (default: Gau
         'target_update_interval':10, # Value target update per no. of updates per step (default: 1) 目标网络更新的间隔
         'replay_size':10000000, # size of replay buffer (default: 10000000)
         'cuda':True, # run on CUDA (default: False)
-        'LOAD PARA': True, #是否读取参数
+        'LOAD PARA': False, #是否读取参数
         'task':'Train', # 测试或训练或画图，Train,Test,Plot
         'activation':nn.ReLU, #激活函数类型
         'plot_type':'2D-2line', #'3D-1line'为三维图，一条曲线；'2D-2line'为二维图，两条曲线

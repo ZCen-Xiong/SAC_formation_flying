@@ -252,8 +252,8 @@ class Rel_trans:
               - np.linalg.norm(J_agent)/10
               '''
         """ reward here 随着步数递减 """
-        reward = heading_reward*(1 - self.travel[0]**(1/2))
-        # + (np.linalg.norm(J_dumm) - np.linalg.norm(J_agent))
+        reward = (1 - self.travel[0]**(1/2)) * heading_reward/10 - 1e-2*self.travel[0]**(1/2)*(
+            dV + (np.linalg.norm(J_agent)-np.linalg.norm(J_dumm)))
         # - (np.linalg.norm(alpha) + np.linalg.norm(beta))*20*np.linalg.norm(self.travel)**2
         # print('j:',np.linalg.norm(J_dumm) - np.linalg.norm(J_agent))
         # print('HEADING',heading_reward)
@@ -265,19 +265,6 @@ class Rel_trans:
             elif np.linalg.norm(J_agent) <= 1e1 and self.t_scn <= self.T_final:
                 self.isInject=1
                 reward = 1000
-
-        # if self.t_scn >= self.T_final or np.linalg.norm(J_agent) <= 1e1:
-        #     self.done = True
-        # if not self.done:
-        #     reward = - dV/1e2 + heading_reward*20
-
-        # if self.done:
-        #     if np.linalg.norm(J_agent) > 1e1:
-        #         self.isInject = 0 #用来区分越界和到达目标
-        #         reward = 0
-        #     elif np.linalg.norm(J_agent) <= 1e1 and self.t_scn <= self.T_final:
-        #         self.isInject=1
-        #         reward=3000
 
         # 因为需要为下一个时刻
         for sat_i in range(0,3):
