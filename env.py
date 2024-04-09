@@ -236,7 +236,6 @@ class Rel_trans:
             proj_area = abs(0.5 * np.dot(formation_product, self.heading))
             return proj_area
         
-
         heading_reward = calculate_area(next_agent_pos) - calculate_area(dumm_Sat_pos)
         # print('heading_reward:',calculate_area(next_agent_pos))
         # print('dV:',dV)
@@ -252,11 +251,15 @@ class Rel_trans:
               - np.linalg.norm(J_agent)/10
               '''
         """ reward here 随着步数递减 """
-        reward = (1 - self.travel[0]**(1/2)) * heading_reward/10 - 1e-2*self.travel[0]**(1/2)*(
+        '''纯面积奖励'''
+        # reward = (1 - self.travel[0]**(1/2)) * heading_reward/10 
+        '''慢于MPC则出现控制惩罚'''
+        exceed_time_punish = 0.0
+        if np.linalg.norm(J_dumm)<1:
+            exceed_time_punish = 1.0
+        reward = (1 - self.travel[0]**(1/2)) * heading_reward - exceed_time_punish*1e-3*self.travel[0]**(1/5)*(
             dV + (np.linalg.norm(J_agent)-np.linalg.norm(J_dumm)))
-        # - (np.linalg.norm(alpha) + np.linalg.norm(beta))*20*np.linalg.norm(self.travel)**2
-        # print('j:',np.linalg.norm(J_dumm) - np.linalg.norm(J_agent))
-        # print('HEADING',heading_reward)
+        
         if self.t_scn >= self.T_final or np.linalg.norm(J_agent) <= 1e1:
             self.done = True
             if np.linalg.norm(J_agent) > 1e1:
@@ -264,7 +267,7 @@ class Rel_trans:
                 reward = 0
             elif np.linalg.norm(J_agent) <= 1e1 and self.t_scn <= self.T_final:
                 self.isInject=1
-                reward = 1000
+                reward = 3000
 
         # 因为需要为下一个时刻
         for sat_i in range(0,3):
