@@ -79,21 +79,21 @@ class Rel_trans:
         ''' initial orbit 以下为随机生成两组差距36度的轨道'''
         self.azi_0 = np.random.uniform(0, 2*np.pi)
         # 只朝z正已经覆盖了全部目标空间了，因为智能体姿态可以正负转，主要害怕的是-0到+0的奇异
-        self.ele_f = np.random.uniform(0.05*np.pi, 0.5*np.pi)
+        self.ele_0 = np.random.uniform(0.05*np.pi, 0.5*np.pi)
         # final orbit 轨道差为0.2pi和0.1pi
-        self.azi_f = self.azi_0 + np.random.uniform(-0.2*np.pi, 0.2*np.pi)
-        ele_f = self.ele_f + np.random.uniform(-0.1*np.pi, 0.1*np.pi)
+        self.azi_f = self.azi_0 + np.random.uniform(-0.1*np.pi, 0.1*np.pi)
+        self.ele_f = self.ele_0 + np.random.uniform(-0.1*np.pi, 0.1*np.pi)
         '''固定实验 '''
         # self.azi_0 = 0.2*np.pi
-        # self.ele_f = 0.15*np.pi
+        # self.ele_0 = 0.15*np.pi
         # self.azi_f = self.azi_0 + 0.2*np.pi
-        # ele_f = self.ele_f + 0.1*np.pi
-        # Check and adjust ele_f if it exceeds 0.5*pi
-        if ele_f > 0.5*np.pi or ele_f < 0.1*np.pi:
-            ele_f = self.ele_f - (ele_f - self.ele_f)
+        # self.ele_f = self.ele_0 + 0.1*np.pi
+        # Check and adjust self.ele_f if it exceeds 0.5*pi
+        if self.ele_f > 0.5*np.pi or self.ele_f < 0.1*np.pi:
+            self.ele_f = self.ele_0 - (self.ele_f - self.ele_0)
         # real amplitude =  20 * sma /(mu)**(1/3)
-        orbit_i0 = orbitgen(self.nT , self.azi_0, self.ele_f, self.p_norm)
-        orbit_f0 = orbitgen(self.nT , self.azi_f, ele_f, self.p_norm)
+        orbit_i0 = orbitgen(self.nT , self.azi_0, self.ele_0, self.p_norm)
+        orbit_f0 = orbitgen(self.nT , self.azi_f, self.ele_f, self.p_norm)
         # 生成初始轨道的随机相位
         phase_d = np.random.uniform(0.0,2*np.pi)
         # 求出轨道状态
@@ -252,23 +252,32 @@ class Rel_trans:
               '''
         """ reward here 随着步数递减 """
         '''纯面积奖励'''
-        # reward = (1 - self.travel[0]**(1/2)) * heading_reward/10 
+        # reward =  heading_reward/10 
         '''慢于MPC则出现控制惩罚'''
-        exceed_time_punish = 0.0
+        exc_t_puni = 0.0
+        exc_t_rewa = 1.0
         if np.linalg.norm(J_dumm)<1:
-            exceed_time_punish = 1.0
-        reward = (1 - self.travel[0]**(1/2)) * heading_reward - exceed_time_punish*1e-3*self.travel[0]**(1/5)*(
-            dV + (np.linalg.norm(J_agent)-np.linalg.norm(J_dumm)))
+            exc_t_puni = 1.0
+        if np.linalg.norm(J_dumm)<1e-1:
+            exc_t_rewa = 0.0
+        # 
+        reward = exc_t_rewa * (1 - self.travel[0]**(1/2)) * heading_reward - exc_t_puni*1e-3*self.travel[0]**(1/5)*(
+            dV + 3*(np.linalg.norm(J_agent)-np.linalg.norm(J_dumm)))
         
-        if self.t_scn >= self.T_final or np.linalg.norm(J_agent) <= 1e1:
+        if np.linalg.norm(J_agent)-np.linalg.norm(J_dumm)>100 and np.linalg.norm(J_dumm)<1:
+            reward = -1e3
+
+        # 收敛极限
+        Conv_tol = 10
+        if self.t_scn >= self.T_final or np.linalg.norm(J_agent) <= Conv_tol:
             self.done = True
-            if np.linalg.norm(J_agent) > 1e1:
+            if np.linalg.norm(J_agent) > Conv_tol:
                 self.isInject = 0 #用来区分越界和到达目标
                 reward = 0
-            elif np.linalg.norm(J_agent) <= 1e1 and self.t_scn <= self.T_final:
+            elif np.linalg.norm(J_agent) <= Conv_tol and self.t_scn <= self.T_final:
                 self.isInject=1
-                reward = 3000
-
+                reward = 10000
+        
         # 因为需要为下一个时刻
         for sat_i in range(0,3):
             for ri in range(0,self.horizon):

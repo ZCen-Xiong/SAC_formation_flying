@@ -36,13 +36,13 @@ args={'policy':"Gaussian", # Policy Type: Gaussian | Deterministic (default: Gau
         'automatic_entropy_tuning':False, # Automaically adjust α (default: False)
         'batch_size':512, # batch size (default: 256)
         'num_steps':1000, # maximum number of steps (default: 1000000)
-        'hidden_sizes':[1024,512,512,256], # 隐藏层大小，带有激活函数的隐藏层层数等于这一列表大小
+        'hidden_sizes':[1024,512,256], # 隐藏层大小，带有激活函数的隐藏层层数等于这一列表大小
         'updates_per_step':1, # model updates per simulator step (default: 1) 每步对参数更新的次数
         'start_steps':1000, # Steps sampling random actions (default: 10000) 在开始训练之前完全随机地进行动作以收集数据
         'target_update_interval':10, # Value target update per no. of updates per step (default: 1) 目标网络更新的间隔
         'replay_size':10000000, # size of replay buffer (default: 10000000)
         'cuda':True, # run on CUDA (default: False)
-        'LOAD PARA': False, #是否读取参数
+        'LOAD PARA': True, #是否读取参数
         'task':'Train', # 测试或训练或画图，Train,Test,Plot
         'activation':nn.ReLU, #激活函数类型
         'plot_type':'2D-2line', #'3D-1line'为三维图，一条曲线；'2D-2line'为二维图，两条曲线
@@ -89,7 +89,7 @@ if args['task']=='Train':
     avg_reward_list=[]
     if args['LOAD PARA']==True:
         agent.load_checkpoint("sofarsogood.pt")
-        best_avg_reward=100
+        best_avg_reward = 40
     for i_episode in itertools.count(1): #itertools.count(1)用于创建一个无限迭代器。它会生成一个连续的整数序列，从1开始，每次递增1。
         success=False
         episode_reward = 0
@@ -139,7 +139,7 @@ if args['task']=='Train':
             avg_reward = 0.
             episodes = 10
             if args['LOAD PARA']==True:
-                episodes = 20
+                episodes = 40
             done_num=0
             for _  in range(episodes):
                 state = env_f.reset()
@@ -196,6 +196,7 @@ if args['task']=='Test':
             if done:
                 break
         avg_reward += episode_reward
+        print("EP_reward:",episode_reward)
     avg_reward /= episodes
     #writer.add_scalar('avg_reward/test', avg_reward, i_episode)
     print("----------------------------------------")
