@@ -34,8 +34,8 @@ class Rel_trans:
         self.agent_state = np.zeros((3*6,))
         # 当前的轨道序列
         self.agent_seq = np.zeros((3*6*self.horizon,))
-        # 无智能体干预的轨道序列
-        self.dumm_seq = np.zeros((3*6*self.horizon,))
+        # 无智能体干预的轨道序列 
+        # self.dumm_seq = np.zeros((3*6*self.horizon,)) # 0425 这玩意没有意义，预测用不上，规划动作用不上，输出奖励用不上
         # 目标轨道的序列
         self.target_seq = np.zeros((3*6*self.horizon,)) 
         # inject signal
@@ -69,36 +69,42 @@ class Rel_trans:
         self.Hbar_half = Hbar/2 + Hbar.T/2
         self.f = self.MPC.f_func()
 
-    def reset(self): #,prop_t
+    def reset(self, ini_fin_in = None,ini_phi = None): #,prop_t
         super().__init__()
         self.agent_state_list=[]
         self.t_scn = 0 # 场景初始时间
         self.isInject=0 # done无法用于区分是否到达目标，所以加入另一个标志位
         self.done=False # done是q函数计算所必要的
+        if ini_fin_in is None:
+            ''' initial orbit 以下为随机生成两组差距36度的轨道'''
+            self.azi_0 = np.random.uniform(0, 2*np.pi)
+            # 只朝z正已经覆盖了全部目标空间了，因为智能体姿态可以正负转，主要害怕的是-0到+0的奇异
+            self.ele_0 = np.random.uniform(0.05*np.pi, 0.5*np.pi)
+            # final orbit 轨道差为0.2pi和0.1pi
+            self.azi_f = self.azi_0 + np.random.uniform(-0.1*np.pi, 0.1*np.pi)
+            self.ele_f = self.ele_0 + np.random.uniform(-0.1*np.pi, 0.1*np.pi)
+            '''固定实验 '''
+            if self.ele_f > 0.5*np.pi or self.ele_f < 0.1*np.pi:
+                self.ele_f = self.ele_0 - (self.ele_f - self.ele_0)
+        else:
+            self.azi_0 = ini_fin_in[0]
+            self.ele_0 = ini_fin_in[1]
+            self.azi_f = ini_fin_in[2]
+            self.ele_f = ini_fin_in[3]
 
-        ''' initial orbit 以下为随机生成两组差距36度的轨道'''
-        self.azi_0 = np.random.uniform(0, 2*np.pi)
-        # 只朝z正已经覆盖了全部目标空间了，因为智能体姿态可以正负转，主要害怕的是-0到+0的奇异
-        self.ele_0 = np.random.uniform(0.05*np.pi, 0.5*np.pi)
-        # final orbit 轨道差为0.2pi和0.1pi
-        self.azi_f = self.azi_0 + np.random.uniform(-0.1*np.pi, 0.1*np.pi)
-        self.ele_f = self.ele_0 + np.random.uniform(-0.1*np.pi, 0.1*np.pi)
-        '''固定实验 '''
-        # self.azi_0 = 0.2*np.pi
-        # self.ele_0 = 0.15*np.pi
-        # self.azi_f = self.azi_0 + 0.2*np.pi
-        # self.ele_f = self.ele_0 + 0.1*np.pi
         # Check and adjust self.ele_f if it exceeds 0.5*pi
-        if self.ele_f > 0.5*np.pi or self.ele_f < 0.1*np.pi:
-            self.ele_f = self.ele_0 - (self.ele_f - self.ele_0)
+
         # real amplitude =  20 * sma /(mu)**(1/3)
-        orbit_i0 = orbitgen(self.nT , self.azi_0, self.ele_0, self.p_norm)
-        orbit_f0 = orbitgen(self.nT , self.azi_f, self.ele_f, self.p_norm)
+        self.orbit_i0 = orbitgen(self.nT , self.azi_0, self.ele_0, self.p_norm)
+        self.orbit_f0 = orbitgen(self.nT , self.azi_f, self.ele_f, self.p_norm)
         # 生成初始轨道的随机相位
-        phase_d = np.random.uniform(0.0,2*np.pi)
+        if ini_phi is None:
+            phase_d = np.random.uniform(0.0,2*np.pi)
+        else:
+            phase_d = ini_phi
         # 求出轨道状态
-        Xi_0 = Free(phase_d,0,orbit_i0,self.nT)
-        Xf_0 = Free(phase_d,0,orbit_f0,self.nT)
+        Xi_0 = Free(phase_d,0,self.orbit_i0,self.nT)
+        Xf_0 = Free(phase_d,0,self.orbit_f0,self.nT)
         theta_i = np.arctan2(Xi_0[1], Xi_0[0])
         theta_f = np.arctan2(Xf_0[1], Xf_0[0])
         theta_diff = theta_f - theta_i  # 顺时针下，f滞后于i的相位
@@ -120,19 +126,18 @@ class Rel_trans:
         self.dumm_state =  self.agent_state
         self.Tar_state = np.concatenate((self.Xf_adj, Bi_f, Ci_f))
         
-        s_len = 6*self.horizon # 智能体数据间的间隔，意思就是每个智能体有多少步
-        r_len = 6              # 时间相邻两个状态的数据间隔
+        self.s_len = 6*self.horizon # 智能体数据间的间隔，意思就是每个智能体有多少步
+        self.r_len = 6              # 时间相邻两个状态的数据间隔
         for sat_i in range(0,3):
             for ri in range(0,self.horizon):
                 # 预测序列是按这样布置的，先把第一个智能体的1-5步放完，再把第二个智能体的1-5步放完，再放第三个智能体的1-5步
                 #   sat1 t1-t5, sat2 t1-t5, sat3 t1-t5
-                t_r = self.t_scn + (ri+1)*self.dT_norm
+                t_r = (ri+1)*self.dT_norm
                 # 这种就是按照 先排完一个智能体的全部数据，再排另外一个智能体
-                index_start = sat_i*s_len + ri*r_len  # 0 
+                index_start = sat_i*self.s_len + ri*self.r_len  # 0 
                 index_end = index_start + 6
                 self.agent_seq[index_start:index_end] = Free(t_r,0,self.agent_state[sat_i*6:sat_i*6+6],self.nT)
-                self.dumm_seq[index_start:index_end] = Free(t_r,0,self.agent_state[sat_i*6:sat_i*6+6],self.nT)
-                self.target_seq[index_start:index_end] = Free(t_r,0,self.Tar_state[sat_i*6:sat_i*6+6],self.nT)
+                self.target_seq[index_start:index_end] = Free(self.t_scn + t_r,0,self.Tar_state[sat_i*6:sat_i*6+6],self.nT)
                 
         def an2vec(elevation_rad,azimuth_rad):
             # 计算方向矢量
@@ -148,13 +153,11 @@ class Rel_trans:
         # 大概率不会超过这个数字，在GEO下，200km的归一化长度为300左右, 包括目标指向的矢量，我希望网络能学到其中的关联
         return np.concatenate((self.agent_seq/1e3,self.target_seq/1e3,self.heading,self.travel))
 
-    def step(self,Sat_action): 
+
+    def internal_step(self, Sat_action, isPlot):
         # action是一个向量系数 3*2*self.horizon 个 3个智能体 每个智能体2个维度
-        # 前一半的系数3*horizon是alpha，后一半的系数3*horizon是beta
+        # 前一半的系数3*horizon是alpha，后一半的系数3*horizon是beta        
         self.agent_state_list.append(self.agent_state) # N x 18的矩阵
-        # 此时拿到的是上一个时刻预测的点，你可能要问为什么reset里来了一次，
-        # 为什么还要再来一次，因为reset之后就得生成动作了，这个本来就是要预测的，只不过在reset里重复一下     
-        
         # 沿着法向指向的矢量
         normal_track = self.target_seq - self.agent_seq  # 第一个智能体h*6个状态 第二个智能体 h*6个状态 第三个智能体 h*6个状态
         alpha = np.repeat(Sat_action[0:3*self.horizon],6)
@@ -165,68 +168,54 @@ class Rel_trans:
         raw_point = np.dot(alpha,normal_track) + np.dot(beta,radius_track)
         # 里程
         self.travel[0] = self.t_scn/self.T_final
-        # # 倾向于目标轨道的系数
-        # if self.t_scn <= self.T_final*0.6:
-        #     target_weight = self.travel
-        # else:
-        #     target_weight = 1.0
         # 使用连续的
         target_weight = self.travel[0]**(1/5)
         # 修正后的路径航点 3*(h*6)
         pred_point = raw_point * (1-target_weight) + self.target_seq
-
-
-
-        # MPC序列 
+        # MPC序列 的控制上下界
         lb = -np.ones([3*self.horizon,1])*self.thrust_norm
         ub = np.ones([3*self.horizon,1])*self.thrust_norm
 
-        s_len = 6*self.horizon # 智能体数据间的间隔，意思就是每个智能体有多少 步 * 状态
-        r_len = 6              # 时间相邻两个状态的数据间隔
-        # 采用了dV计算，直接不用了
-        # ac_len = 3*self.horizon # 智能体动作序列间的间隔，意思就是每个智能体有多少 步 * 动作
-        # action_seq = np.zeros([3*ac_len,1])
         dV = 0.0
         
         next_agent_state = np.zeros([3*6,]) # 18个状态，就是最正统的智能体在T_SCN控制后的实际状态
         next_agent_pos = np.zeros([3,3])    # 仅用于计算三颗星的方向与目标天区
          # 仅用于计算是否入轨
-        next_agent_seq = np.zeros([3*s_len,]) # 从t_scn开始的外推
+        next_agent_seq = np.zeros([3*self.s_len,]) # 从t_scn开始的外推
 
         next_dumm_state = np.zeros([3*6,]) # 不使用强化学习的MPC规划
         dumm_Sat_pos = np.zeros([3,3])
          # 仅用于计算是否入轨 所以暂时用不上
-        next_dumm_seq = np.zeros([3*s_len,])
+        next_dumm_seq = np.zeros([3*self.s_len,])
         
         for sat_i in range(0,3):
             # 从target集合中，取出单个智能体的预测序列 
             # 取出第一个智能体的 6*horizon 目标状态
-            s_target_seq = pred_point[s_len*sat_i:s_len*(sat_i+1)] 
+            s_target_seq = pred_point[self.s_len*sat_i:self.s_len*(sat_i+1)] 
             # 取出第一个智能体的 6*1当前状态
             s_sat_state = self.agent_state[sat_i*6:sat_i*6+6]
             s_dumm_state = self.dumm_state[sat_i*6:sat_i*6+6]
             # 一次项系数
             fo = np.hstack((s_sat_state, s_target_seq)).T @ self.f
-            fo_dumm = np.hstack((s_dumm_state, self.target_seq[s_len*sat_i:s_len*(sat_i+1)])).T @ self.f
+            fo_dumm = np.hstack((s_dumm_state, self.target_seq[self.s_len*sat_i:self.s_len*(sat_i+1)])).T @ self.f
             # 计算出第一个智能体的 3*horizon 个机动控制
             Acons_norm = self.MPC.Acons_func() @ self.F_norm
             Bcons_norm = self.MPC.Dy_func(-np.ones((6,1))*1e2, np.ones((6,1))*1e2) - self.MPC.Acons_func()@ self.M_norm @ s_sat_state.reshape(6, 1)
             s_agent_act_seq = quadprog(self.Hbar_half, fo.T, Acons_norm, Bcons_norm,  None, None,lb, ub)  
             # 计算出没有智能体参与的 3*horizon 个机动控制
             s_dumm_act_seq = quadprog(self.Hbar_half, fo_dumm.T, Acons_norm, Bcons_norm,  None, None,lb, ub).flatten()  
-
-
             s_agent_act_seq = s_agent_act_seq.flatten() # 3*horizon
             current_action = s_agent_act_seq[0:3]
             dV = dV + np.linalg.norm(current_action)
+
             next_agent_state[6*sat_i:6*(sat_i+1)] = self.Ad_norm @ s_sat_state + self.Bd_norm @ current_action
             next_dumm_state[6*sat_i:6*(sat_i+1)] = self.Ad_norm @ s_dumm_state + self.Bd_norm @ s_dumm_act_seq[0:3]
             # 仅用于计算三颗星的方向与目标天区
             next_agent_pos[sat_i,:] = next_agent_state[6*sat_i:6*sat_i+3]
             dumm_Sat_pos[sat_i,:] = next_dumm_state[6*sat_i:6*sat_i+3]
             # 仅用于计算是否入轨
-            next_agent_seq[s_len*sat_i:s_len*(sat_i+1)] = self.M_norm @ self.agent_state[6*sat_i:6*(sat_i+1)] + self.F_norm @ s_agent_act_seq
-            next_dumm_seq[s_len*sat_i:s_len*(sat_i+1)] = self.M_norm @ self.dumm_state[6*sat_i:6*(sat_i+1)] + self.F_norm @ s_dumm_act_seq
+            next_agent_seq[self.s_len*sat_i:self.s_len*(sat_i+1)] = self.M_norm @ self.agent_state[6*sat_i:6*(sat_i+1)] + self.F_norm @ s_agent_act_seq
+            next_dumm_seq[self.s_len*sat_i:self.s_len*(sat_i+1)] = self.M_norm @ self.dumm_state[6*sat_i:6*(sat_i+1)] + self.F_norm @ s_dumm_act_seq
 
         '''计算目标天区与三颗星的方向构成面积的奖励'''
         def calculate_area(pos):
@@ -245,27 +234,26 @@ class Rel_trans:
         self.dumm_state = next_dumm_state
         self.agent_state = next_agent_state
         self.t_scn += self.dT_norm
-        '''
-        print('dV:',dV,'heading_reward: ',heading_reward,'alpha',np.linalg.norm(alpha),
-              'J:',np.linalg.norm(J_agent),'beta',np.linalg.norm(beta))
-              - np.linalg.norm(J_agent)/10
-              '''
-        """ reward here 随着步数递减 """
-        '''纯面积奖励'''
-        # reward =  heading_reward/10 
-        '''慢于MPC则出现控制惩罚'''
-        exc_t_puni = 0.0
-        exc_t_rewa = 1.0
-        if np.linalg.norm(J_dumm)<1:
-            exc_t_puni = 1.0
-        if np.linalg.norm(J_dumm)<1e-1:
-            exc_t_rewa = 0.0
-        # 
-        reward = exc_t_rewa * (1 - self.travel[0]**(1/2)) * heading_reward - exc_t_puni*1e-3*self.travel[0]**(1/5)*(
-            dV + 3*(np.linalg.norm(J_agent)-np.linalg.norm(J_dumm)))
-        
-        if np.linalg.norm(J_agent)-np.linalg.norm(J_dumm)>100 and np.linalg.norm(J_dumm)<1:
-            reward = -1e3
+
+        if isPlot is None:
+            """ reward here 随着步数递减 """
+            '''纯面积奖励'''
+            # reward =  heading_reward/10 
+            '''慢于MPC则出现控制惩罚'''
+            exc_t_puni = 0.0
+            exc_t_rewa = 1.0
+            if np.linalg.norm(J_dumm)<1:
+                exc_t_puni = 1.0
+            if np.linalg.norm(J_dumm)<1e-1:
+                exc_t_rewa = 0.0
+            # 
+            reward = exc_t_rewa * (1 - self.travel[0]**(1/2)) * heading_reward - exc_t_puni*1e-3*self.travel[0]**(1/5)*(
+                dV + 3*(np.linalg.norm(J_agent)-np.linalg.norm(J_dumm)))
+            
+            if np.linalg.norm(J_agent)-np.linalg.norm(J_dumm)>100 and np.linalg.norm(J_dumm)<1:
+                reward = -1e3
+        else: # 绘图仅输出面积奖励
+            reward = heading_reward
 
         # 收敛极限
         Conv_tol = 10
@@ -283,34 +271,27 @@ class Rel_trans:
             for ri in range(0,self.horizon):
                 # 预测序列是按这样布置的，先把第一个智能体的1-5步放完，再把第二个智能体的1-5步放完，再放第三个智能体的1-5步
                 #   sat1 t1-t5, sat2 t1-t5, sat3 t1-t5
-                t_r = self.t_scn + (ri+1)*self.dT_norm
+                t_r = ri * self.dT_norm # 0425 已修改为当前往后外推
                 # 这种就是按照 先排完一个智能体的全部数据，再排另外一个智能体
-                index_start = sat_i*s_len + ri*r_len  # 0 
+                index_start = sat_i*self.s_len + ri*self.r_len  # 0 
                 index_end = index_start + 6
+                # 0425 这里几个状态都是已经外推过的了，sb, 只有 Tar_state 是从头开始的
                 self.agent_seq[index_start:index_end] = Free(t_r,0,self.agent_state[sat_i*6:sat_i*6+6],self.nT)
-                self.dumm_seq[index_start:index_end] = Free(t_r,0,self.dumm_state[sat_i*6:sat_i*6+6],self.nT)
-                self.target_seq[index_start:index_end] = Free(t_r,0,self.Tar_state[sat_i*6:sat_i*6+6],self.nT)
+                self.target_seq[index_start:index_end] = Free(self.t_scn + t_r ,0,self.Tar_state[sat_i*6:sat_i*6+6],self.nT)
 
+        return reward
+
+    def step(self,Sat_action): 
+        
+        reward = self.internal_step(Sat_action, isPlot = None)
         return np.concatenate((self.agent_seq/1e3,self.target_seq/1e3,self.heading,self.travel)), reward, self.done, self.isInject
+    
+    def plotstep(self,Sat_action):
+        heading_reward = self.internal_step(Sat_action, isPlot = 1)
+        return np.concatenate((self.agent_seq/1e3,self.target_seq/1e3,self.heading,self.travel)), self.done, self.isInject,self.agent_state_list, heading_reward
 
     def plot(self, args, data_x, data_y, data_z=None):
-        if data_z!=None and args['plot_type']=="3D-1line":
-            fig = plt.figure()
-            ax = fig.gca(projection='3d') #Axes对象是图形的绘图区域，可以在其上进行各种绘图操作。
-                                        #通过gca()函数可以获取当前图形的Axes对象，如果该对象不存在，则会创建一个新的。
-                                        #projection='3d' 参数指定了Axes对象的投影方式为3D，即创建一个三维坐标系。
-            plt.plot(0,0,0,'r*') #画一个位于原点的星形
-            plt.plot(data_x,data_y,data_z,'b',linewidth=1) #画三维图
-            ax.set_xlabel('x', fontsize=15)
-            ax.set_ylabel('y', fontsize=15)
-            ax.set_zlabel('z', fontsize=15)
-            ax.set_xlim(-10,10)
-            ax.set_ylim(-10,10)
-            ax.set_zlim(-10,10)
-            if not os.path.exists('logs'):
-                os.makedirs('logs')
-            plt.savefig(args['plot_title'])# 'logs/{}epoch-{}steps.png'.format(epoch,steps)
-        elif data_z!=None and args['plot_type']=="2D-2line":
+        if data_z!=None and args['plot_type']=="2D-2line":
             fig = plt.figure()
             ax = fig.gca() #Axes对象是图形的绘图区域，可以在其上进行各种绘图操作。通过gca()函数可以获取当前图形的Axes对象，如果该对象不存在，则会创建一个新的。
             plt.plot(data_x,data_y,'b',linewidth=0.5)
