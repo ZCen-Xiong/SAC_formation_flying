@@ -247,11 +247,12 @@ class Rel_trans:
             if np.linalg.norm(J_dumm)<1e-1:
                 exc_t_rewa = 0.0
             # 
-            reward = exc_t_rewa * (1 - self.travel[0]**(1/2)) * heading_reward - exc_t_puni*1e-3*self.travel[0]**(1/5)*(
+            un_step = self.dT_norm/self.T_final
+            reward = exc_t_rewa * (1 - self.travel[0]**(1/2)) * heading_reward - exc_t_puni*un_step*self.travel[0]**(1/2)*(
                 dV + 3*(np.linalg.norm(J_agent)-np.linalg.norm(J_dumm)))
             
             if np.linalg.norm(J_agent)-np.linalg.norm(J_dumm)>100 and np.linalg.norm(J_dumm)<1:
-                reward = -1e3
+                reward = -1e2
         else: # 绘图仅输出面积奖励
             reward = heading_reward
 
